@@ -1,5 +1,6 @@
 package com.spendwise.auth.service;
 
+import jakarta.annotation.PostConstruct;
 import jakarta.mail.internet.MimeMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,9 +40,27 @@ public class AuthEmailServiceImpl implements AuthEmailService {
     @Value("${RESEND_API_KEY:${fintrack.mail.resend-api-key:}}")
     private String resendApiKey;
 
+    @Value("${BREVO_API_KEY:${fintrack.mail.brevo-api-key:}}")
+    private String brevoApiKey;
+
+    @Value("${GOOGLE_SCRIPT_MAIL_URL:${fintrack.mail.google-script-url:}}")
+    private String googleScriptUrl;
+
     public AuthEmailServiceImpl(JavaMailSender mailSender, AuthEmailTemplateBuilder templateBuilder) {
         this.mailSender = mailSender;
         this.templateBuilder = templateBuilder;
+    }
+
+    @PostConstruct
+    public void init() {
+        if (googleScriptUrl != null && !googleScriptUrl.isBlank()) {
+            String masked = googleScriptUrl.length() > 35 
+                    ? googleScriptUrl.substring(0, 35) + "..." 
+                    : googleScriptUrl;
+            log.info("📧 Google Apps Script Email Relay is ACTIVE. Target: {}", masked);
+        } else {
+            log.info("📧 Google Apps Script Email Relay is NOT set (GOOGLE_SCRIPT_MAIL_URL is empty)");
+        }
     }
 
     @Override
@@ -56,15 +75,24 @@ public class AuthEmailServiceImpl implements AuthEmailService {
             AuthEmailTemplateBuilder.EmailContent emailContent = templateBuilder.buildPasswordResetEmail(
                     recipientName, rawToken, tokenTtlMinutes);
 
-            // Try HTTPS Resend API first (works on Render Free where SMTP port 587 is blocked)
-            if (sendViaResend(recipientEmail, emailContent.getSubject(), emailContent.getHtmlBody())) {
-                log.info("Password reset email dispatched successfully via Resend HTTPS to {}", maskEmail(recipientEmail));
+            // 1. Try Google Apps Script Webhook (Port 443 - uses your real Gmail, no restrictions)
+            if (sendViaGoogleScript(recipientEmail, emailContent.getSubject(), emailContent.getHtmlBody(), emailContent.getTextBody())) {
                 return;
             }
 
-            // Fallback to standard SMTP
+            // 2. Try Brevo HTTPS API (Port 443 - delivers to any recipient)
+            if (sendViaBrevo(recipientEmail, recipientName, emailContent.getSubject(), emailContent.getHtmlBody())) {
+                return;
+            }
+
+            // 3. Try Resend HTTPS API (Port 443)
+            if (sendViaResend(recipientEmail, emailContent.getSubject(), emailContent.getHtmlBody())) {
+                return;
+            }
+
+            // 4. Fallback to standard SMTP
             sendMimeMessageWithRetry(recipientEmail, emailContent.getSubject(), emailContent.getHtmlBody(), emailContent.getTextBody());
-            log.info("Password reset email dispatched successfully to {}", maskEmail(recipientEmail));
+            log.info("Password reset email dispatched successfully via SMTP to {}", maskEmail(recipientEmail));
         } catch (Exception e) {
             log.error("Failed to deliver password reset email to {}: {}", maskEmail(recipientEmail), e.getMessage());
         }
@@ -81,8 +109,15 @@ public class AuthEmailServiceImpl implements AuthEmailService {
             AuthEmailTemplateBuilder.EmailContent emailContent = templateBuilder.buildPasswordChangedAlert(
                     recipientName, LocalDateTime.now());
 
+            if (sendViaGoogleScript(recipientEmail, emailContent.getSubject(), emailContent.getHtmlBody(), emailContent.getTextBody())) {
+                return;
+            }
+
+            if (sendViaBrevo(recipientEmail, recipientName, emailContent.getSubject(), emailContent.getHtmlBody())) {
+                return;
+            }
+
             if (sendViaResend(recipientEmail, emailContent.getSubject(), emailContent.getHtmlBody())) {
-                log.info("Password changed security alert sent via Resend HTTPS to {}", maskEmail(recipientEmail));
                 return;
             }
 
@@ -90,6 +125,86 @@ public class AuthEmailServiceImpl implements AuthEmailService {
             log.info("Password changed security alert sent to {}", maskEmail(recipientEmail));
         } catch (Exception e) {
             log.warn("Failed to send password changed alert to {}: {}", maskEmail(recipientEmail), e.getMessage());
+        }
+    }
+
+    private boolean sendViaGoogleScript(String to, String subject, String htmlBody, String textBody) {
+        if (googleScriptUrl == null || googleScriptUrl.isBlank()) {
+            return false;
+        }
+        try {
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(10))
+                    .followRedirects(HttpClient.Redirect.ALWAYS)
+                    .build();
+
+            String safeText = (textBody != null && !textBody.isBlank()) ? textBody : subject;
+
+            // Provide multiple aliases (html, htmlBody, body, text) so any Google Script variation parses correctly
+            String jsonPayload = "{\"to\":\"" + to + "\"," +
+                    "\"subject\":" + quoteJson(subject) + "," +
+                    "\"html\":" + quoteJson(htmlBody) + "," +
+                    "\"htmlBody\":" + quoteJson(htmlBody) + "," +
+                    "\"body\":" + quoteJson(safeText) + "," +
+                    "\"text\":" + quoteJson(safeText) + "}";
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(googleScriptUrl.trim()))
+                    .timeout(Duration.ofSeconds(20))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                    .build();
+
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 400) {
+                log.info("✅ Email successfully delivered via Google Script Webhook to {}", maskEmail(to));
+                return true;
+            } else {
+                log.warn("Google Script Webhook returned status {}: {}", response.statusCode(), response.body());
+                return false;
+            }
+        } catch (Exception e) {
+            log.warn("Google Script Webhook dispatch failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    private boolean sendViaBrevo(String to, String toName, String subject, String htmlBody) {
+        if (brevoApiKey == null || brevoApiKey.isBlank()) {
+            return false;
+        }
+        try {
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(10))
+                    .build();
+
+            String safeToName = (toName != null && !toName.isBlank()) ? toName : "User";
+
+            String jsonPayload = "{\"sender\":{\"name\":\"" + fromName + "\",\"email\":\"" + fromEmail + "\"}," +
+                    "\"to\":[{\"email\":\"" + to + "\",\"name\":\"" + safeToName + "\"}]," +
+                    "\"subject\":" + quoteJson(subject) + "," +
+                    "\"htmlContent\":" + quoteJson(htmlBody) + "}";
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create("https://api.brevo.com/v3/smtp/email"))
+                    .timeout(Duration.ofSeconds(15))
+                    .header("api-key", brevoApiKey.trim())
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                    .build();
+
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                log.info("✅ Email successfully delivered via Brevo HTTPS API to {}", maskEmail(to));
+                return true;
+            } else {
+                log.warn("Brevo API returned status {}: {}", response.statusCode(), response.body());
+                return false;
+            }
+        } catch (Exception e) {
+            log.warn("Brevo HTTPS API dispatch failed: {}", e.getMessage());
+            return false;
         }
     }
 
