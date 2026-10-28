@@ -30,6 +30,7 @@ public class SecurityConfig {
             .cors(AbstractHttpConfigurer::disable)
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
+                    "/",
                     "/api/auth/register",
                     "/api/auth/login",
                     "/api/auth/validate",
