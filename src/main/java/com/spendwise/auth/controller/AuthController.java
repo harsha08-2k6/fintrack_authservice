@@ -32,8 +32,13 @@ public class AuthController {
             HttpServletRequest httpRequest
     ) {
         String clientIp = resolveClientIp(httpRequest);
-        passwordResetService.processForgotPassword(request, clientIp);
-        return ResponseEntity.ok(Map.of("message", "If an account exists for this email, password reset instructions will be sent."));
+        String resetUrl = passwordResetService.processForgotPassword(request, clientIp);
+        java.util.Map<String, String> response = new java.util.HashMap<>();
+        response.put("message", "If an account exists for this email, password reset instructions will be sent.");
+        if (resetUrl != null) {
+            response.put("resetUrl", resetUrl);
+        }
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping("/validate-reset-token")

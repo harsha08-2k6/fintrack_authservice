@@ -54,19 +54,19 @@ public class PasswordResetService {
     }
 
     @Transactional
-    public void processForgotPassword(ForgotPasswordRequest request, String ipAddress) {
+    public String processForgotPassword(ForgotPasswordRequest request, String ipAddress) {
         String cleanEmail = request.getEmail().trim().toLowerCase();
 
         // Check IP rate limit (maximum 10 requests per hour per IP)
         if (ipAddress != null && tokenRepository.countByIpAddressAndCreatedAtAfter(ipAddress, LocalDateTime.now().minusHours(1)) >= 10) {
             log.warn("Password reset rate limit exceeded for IP: {}", ipAddress);
-            return; // Return silently to prevent timing / enumeration attacks
+            return null; // Return silently to prevent timing / enumeration attacks
         }
 
         Optional<User> userOpt = userRepository.findByEmail(cleanEmail);
         if (userOpt.isEmpty()) {
-            log.info("Password reset requested for non-existent address (enumeration prevented)");
-            return;
+            log.info("Password reset requested for non-existent address: {} (enumeration prevented)", cleanEmail);
+            return null;
         }
 
         User user = userOpt.get();
@@ -74,7 +74,7 @@ public class PasswordResetService {
         // Check user rate limit (maximum 5 requests per hour per user)
         if (tokenRepository.countByUserIdAndCreatedAtAfter(user.getId(), LocalDateTime.now().minusHours(1)) >= 5) {
             log.warn("Password reset rate limit exceeded for user: {}", user.getId());
-            return;
+            return null;
         }
 
         // 1. Invalidate any existing active tokens for this user
@@ -100,6 +100,8 @@ public class PasswordResetService {
 
         // 4. Send reset email asynchronously with raw token
         authEmailService.sendPasswordResetEmailAsync(user.getEmail(), user.getFullName(), rawToken);
+
+        return resetUrl;
     }
 
     public boolean validateToken(String rawToken) {
