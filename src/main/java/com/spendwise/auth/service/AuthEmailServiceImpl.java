@@ -19,13 +19,13 @@ public class AuthEmailServiceImpl implements AuthEmailService {
     private final JavaMailSender mailSender;
     private final AuthEmailTemplateBuilder templateBuilder;
 
-    @Value("${fintrack.mail.enabled:true}")
+    @Value("${fintrack.mail.enabled:${SMTP_ENABLED:true}}")
     private boolean mailEnabled;
 
-    @Value("${fintrack.mail.from-email:tsivaharshavardhanreddy08@gmail.com}")
+    @Value("${fintrack.mail.from-email:${SMTP_FROM_EMAIL:tsivaharshavardhanreddy08@gmail.com}}")
     private String fromEmail;
 
-    @Value("${fintrack.mail.from-name:FinTrack Security}")
+    @Value("${fintrack.mail.from-name:${SMTP_FROM_NAME:FinTrack Security}}")
     private String fromName;
 
     @Value("${fintrack.auth.reset-token-ttl-minutes:30}")

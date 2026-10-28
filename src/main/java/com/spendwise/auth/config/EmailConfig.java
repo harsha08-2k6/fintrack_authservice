@@ -13,34 +13,34 @@ import java.util.concurrent.Executor;
 @Configuration
 public class EmailConfig {
 
-    @Value("${fintrack.mail.host:smtp.gmail.com}")
+    @Value("${fintrack.mail.host:${SMTP_HOST:smtp.gmail.com}}")
     private String host;
 
-    @Value("${fintrack.mail.port:587}")
+    @Value("${fintrack.mail.port:${SMTP_PORT:587}}")
     private int port;
 
-    @Value("${fintrack.mail.username:}")
+    @Value("${fintrack.mail.username:${SMTP_USERNAME:tsivaharshavardhanreddy08@gmail.com}}")
     private String username;
 
-    @Value("${fintrack.mail.password:}")
+    @Value("${fintrack.mail.password:${SMTP_PASSWORD:dunbtfympyqlkaei}}")
     private String password;
 
-    @Value("${fintrack.mail.auth:true}")
+    @Value("${fintrack.mail.auth:${SMTP_AUTH:true}}")
     private boolean auth;
 
-    @Value("${fintrack.mail.starttls.enable:true}")
+    @Value("${fintrack.mail.starttls.enable:${SMTP_STARTTLS:true}}")
     private boolean starttlsEnable;
 
-    @Value("${fintrack.mail.starttls.required:true}")
+    @Value("${fintrack.mail.starttls.required:${SMTP_STARTTLS_REQUIRED:true}}")
     private boolean starttlsRequired;
 
-    @Value("${fintrack.mail.connection-timeout-ms:10000}")
+    @Value("${fintrack.mail.connection-timeout-ms:${SMTP_CONNECTION_TIMEOUT_MS:10000}}")
     private int connectionTimeout;
 
-    @Value("${fintrack.mail.timeout-ms:10000}")
+    @Value("${fintrack.mail.timeout-ms:${SMTP_TIMEOUT_MS:10000}}")
     private int timeout;
 
-    @Value("${fintrack.mail.write-timeout-ms:10000}")
+    @Value("${fintrack.mail.write-timeout-ms:${SMTP_WRITE_TIMEOUT_MS:10000}}")
     private int writeTimeout;
 
     @Bean
@@ -56,6 +56,7 @@ public class EmailConfig {
         props.put("mail.smtp.auth", String.valueOf(auth));
         props.put("mail.smtp.starttls.enable", String.valueOf(starttlsEnable));
         props.put("mail.smtp.starttls.required", String.valueOf(starttlsRequired));
+        props.put("mail.smtp.ssl.trust", "smtp.gmail.com");
         props.put("mail.smtp.connectiontimeout", String.valueOf(connectionTimeout));
         props.put("mail.smtp.timeout", String.valueOf(timeout));
         props.put("mail.smtp.writetimeout", String.valueOf(writeTimeout));
