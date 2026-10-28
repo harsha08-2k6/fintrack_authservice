@@ -38,6 +38,9 @@ public class PasswordResetService {
     @Value("${fintrack.auth.reset-token-ttl-minutes:30}")
     private int tokenTtlMinutes;
 
+    @Value("${fintrack.auth.frontend-url:${FRONTEND_URL:https://fintrack-tau-teal.vercel.app}}")
+    private String frontendUrl;
+
     public PasswordResetService(
             UserRepository userRepository,
             PasswordResetTokenRepository tokenRepository,
@@ -88,6 +91,12 @@ public class PasswordResetService {
 
         PasswordResetToken resetToken = new PasswordResetToken(user.getId(), tokenHash, expiresAt, ipAddress);
         tokenRepository.save(resetToken);
+
+        String resetUrl = frontendUrl.replaceAll("/+$", "") + "/reset-password?token=" + rawToken;
+        log.info("=================================================================");
+        log.info("🔐 [FINTRACK PASSWORD RESET LINK] User: {}", user.getEmail());
+        log.info("👉 Direct Link: {}", resetUrl);
+        log.info("=================================================================");
 
         // 4. Send reset email asynchronously with raw token
         authEmailService.sendPasswordResetEmailAsync(user.getEmail(), user.getFullName(), rawToken);
