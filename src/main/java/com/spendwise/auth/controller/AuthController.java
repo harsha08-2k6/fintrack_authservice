@@ -86,7 +86,7 @@ public class AuthController {
 
     @PostMapping("/change-password")
     public ResponseEntity<Map<String, String>> changePassword(
-            @RequestHeader(value = "X-User-Id", required = false) Long headerUserId,
+            @RequestHeader(value = "X-Authenticated-User-Id", required = false) Long headerUserId,
             @AuthenticationPrincipal Object principal,
             @Valid @RequestBody ChangePasswordRequest request
     ) {
@@ -97,7 +97,7 @@ public class AuthController {
 
     @PutMapping("/profile")
     public ResponseEntity<UserDto> updateProfile(
-            @RequestHeader(value = "X-User-Id", required = false) Long headerUserId,
+            @RequestHeader(value = "X-Authenticated-User-Id", required = false) Long headerUserId,
             @AuthenticationPrincipal Object principal,
             @RequestBody UpdateProfileRequest request
     ) {
