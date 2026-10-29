@@ -92,7 +92,10 @@ public class PasswordResetService {
         PasswordResetToken resetToken = new PasswordResetToken(user.getId(), tokenHash, expiresAt, ipAddress);
         tokenRepository.save(resetToken);
 
-        String resetUrl = frontendUrl.replaceAll("/+$", "") + "/reset-password?token=" + rawToken;
+        String base = (frontendUrl != null && !frontendUrl.isBlank()) 
+                ? frontendUrl.replaceAll("/+$", "") 
+                : "https://fintrack-tau-teal.vercel.app";
+        String resetUrl = base + "/reset-password?token=" + rawToken;
         log.info("=================================================================");
         log.info("🔐 [FINTRACK PASSWORD RESET LINK] User: {}", user.getEmail());
         log.info("👉 Direct Link: {}", resetUrl);

@@ -66,8 +66,12 @@ public class AuthEmailServiceImpl implements AuthEmailService {
     @Override
     @Async("authEmailExecutor")
     public void sendPasswordResetEmailAsync(String recipientEmail, String recipientName, String rawToken) {
-        if (!mailEnabled) {
-            log.info("SMTP delivery disabled by configuration. Password reset email skipped for {}", maskEmail(recipientEmail));
+        boolean hasRelay = (googleScriptUrl != null && !googleScriptUrl.isBlank())
+                || (brevoApiKey != null && !brevoApiKey.isBlank())
+                || (resendApiKey != null && !resendApiKey.isBlank());
+
+        if (!mailEnabled && !hasRelay) {
+            log.info("Email delivery disabled by configuration. Password reset email skipped for {}", maskEmail(recipientEmail));
             return;
         }
 
@@ -90,9 +94,11 @@ public class AuthEmailServiceImpl implements AuthEmailService {
                 return;
             }
 
-            // 4. Fallback to standard SMTP
-            sendMimeMessageWithRetry(recipientEmail, emailContent.getSubject(), emailContent.getHtmlBody(), emailContent.getTextBody());
-            log.info("Password reset email dispatched successfully via SMTP to {}", maskEmail(recipientEmail));
+            // 4. Fallback to standard SMTP if enabled
+            if (mailEnabled) {
+                sendMimeMessageWithRetry(recipientEmail, emailContent.getSubject(), emailContent.getHtmlBody(), emailContent.getTextBody());
+                log.info("Password reset email dispatched successfully via SMTP to {}", maskEmail(recipientEmail));
+            }
         } catch (Exception e) {
             log.error("Failed to deliver password reset email to {}: {}", maskEmail(recipientEmail), e.getMessage());
         }
@@ -101,7 +107,11 @@ public class AuthEmailServiceImpl implements AuthEmailService {
     @Override
     @Async("authEmailExecutor")
     public void sendPasswordChangedAlertAsync(String recipientEmail, String recipientName) {
-        if (!mailEnabled) {
+        boolean hasRelay = (googleScriptUrl != null && !googleScriptUrl.isBlank())
+                || (brevoApiKey != null && !brevoApiKey.isBlank())
+                || (resendApiKey != null && !resendApiKey.isBlank());
+
+        if (!mailEnabled && !hasRelay) {
             return;
         }
 
@@ -121,8 +131,10 @@ public class AuthEmailServiceImpl implements AuthEmailService {
                 return;
             }
 
-            sendMimeMessageWithRetry(recipientEmail, emailContent.getSubject(), emailContent.getHtmlBody(), emailContent.getTextBody());
-            log.info("Password changed security alert sent to {}", maskEmail(recipientEmail));
+            if (mailEnabled) {
+                sendMimeMessageWithRetry(recipientEmail, emailContent.getSubject(), emailContent.getHtmlBody(), emailContent.getTextBody());
+                log.info("Password changed security alert sent to {}", maskEmail(recipientEmail));
+            }
         } catch (Exception e) {
             log.warn("Failed to send password changed alert to {}: {}", maskEmail(recipientEmail), e.getMessage());
         }
@@ -140,11 +152,14 @@ public class AuthEmailServiceImpl implements AuthEmailService {
 
             String safeText = (textBody != null && !textBody.isBlank()) ? textBody : subject;
 
-            // Provide multiple aliases (html, htmlBody, body, text) so any Google Script variation parses correctly
+            // Provide multiple aliases (to, email, recipient, subject, html, htmlBody, message, body, text) so any Google Script variation parses correctly
             String jsonPayload = "{\"to\":\"" + to + "\"," +
+                    "\"email\":\"" + to + "\"," +
+                    "\"recipient\":\"" + to + "\"," +
                     "\"subject\":" + quoteJson(subject) + "," +
                     "\"html\":" + quoteJson(htmlBody) + "," +
                     "\"htmlBody\":" + quoteJson(htmlBody) + "," +
+                    "\"message\":" + quoteJson(htmlBody) + "," +
                     "\"body\":" + quoteJson(safeText) + "," +
                     "\"text\":" + quoteJson(safeText) + "}";
 
