@@ -73,9 +73,12 @@ public class JwtService {
 
     private Key getSignInKey() {
         if (secretKey == null || secretKey.isBlank()) {
-            secretKey = "404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970";
+            throw new IllegalStateException("Mandatory JWT_SECRET is not configured in environment variables.");
         }
         byte[] keyBytes = Decoders.BASE64.decode(secretKey.trim());
+        if (keyBytes.length < 32) {
+            throw new IllegalStateException("JWT_SECRET is insufficiently strong: minimum 256 bits (32 bytes) required.");
+        }
         return Keys.hmacShaKeyFor(keyBytes);
     }
 }
