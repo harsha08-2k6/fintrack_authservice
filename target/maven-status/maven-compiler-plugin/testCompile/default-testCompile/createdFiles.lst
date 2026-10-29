@@ -1,0 +1,4 @@
+com\spendwise\auth\service\AuthEmailTemplateBuilderTest.class
+com\spendwise\auth\service\PasswordResetServiceTest.class
+com\spendwise\auth\security\JwtServiceTest.class
+com\spendwise\auth\service\PasswordResetServiceTest$1.class

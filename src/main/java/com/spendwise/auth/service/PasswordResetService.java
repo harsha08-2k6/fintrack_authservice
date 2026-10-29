@@ -55,18 +55,22 @@ public class PasswordResetService {
 
     @Transactional
     public String processForgotPassword(ForgotPasswordRequest request, String ipAddress) {
+        if (request == null || request.getEmail() == null || request.getEmail().trim().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email address is required.");
+        }
         String cleanEmail = request.getEmail().trim().toLowerCase();
 
         // Check IP rate limit (maximum 10 requests per hour per IP)
         if (ipAddress != null && tokenRepository.countByIpAddressAndCreatedAtAfter(ipAddress, LocalDateTime.now().minusHours(1)) >= 10) {
             log.warn("Password reset rate limit exceeded for IP: {}", ipAddress);
-            return null; // Return silently to prevent timing / enumeration attacks
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Too many password reset requests. Please try again later.");
         }
 
-        Optional<User> userOpt = userRepository.findByEmail(cleanEmail);
+        // Case-insensitive lookup for registered account
+        Optional<User> userOpt = userRepository.findByEmailIgnoreCase(cleanEmail);
         if (userOpt.isEmpty()) {
-            log.info("Password reset requested for non-existent address: {} (enumeration prevented)", cleanEmail);
-            return null;
+            log.warn("Password reset rejected: unregistered address '{}' (no token created, no email dispatched)", cleanEmail);
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No account is registered with this email address");
         }
 
         User user = userOpt.get();
@@ -74,7 +78,7 @@ public class PasswordResetService {
         // Check user rate limit (maximum 5 requests per hour per user)
         if (tokenRepository.countByUserIdAndCreatedAtAfter(user.getId(), LocalDateTime.now().minusHours(1)) >= 5) {
             log.warn("Password reset rate limit exceeded for user: {}", user.getId());
-            return null;
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Too many password reset requests for this account. Please try again later.");
         }
 
         // 1. Invalidate any existing active tokens for this user

@@ -34,7 +34,7 @@ public class AuthController {
         String clientIp = resolveClientIp(httpRequest);
         String resetUrl = passwordResetService.processForgotPassword(request, clientIp);
         java.util.Map<String, String> response = new java.util.HashMap<>();
-        response.put("message", "If an account exists for this email, password reset instructions will be sent.");
+        response.put("message", "Password reset instructions have been dispatched to your registered email address.");
         if (resetUrl != null) {
             response.put("resetUrl", resetUrl);
         }

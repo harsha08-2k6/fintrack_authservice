@@ -13,6 +13,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataAccessException;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
@@ -48,7 +50,7 @@ class PasswordResetServiceTest {
     }
 
     @Test
-    @DisplayName("Forgot password for existing user generates hashed token and dispatches email")
+    @DisplayName("1. Registered email generates a valid reset token and triggers email mechanism")
     void testProcessForgotPasswordExistingUser() {
         User user = User.builder()
                 .id(1L)
@@ -59,10 +61,12 @@ class PasswordResetServiceTest {
                 .build();
 
         when(tokenRepository.countByIpAddressAndCreatedAtAfter(anyString(), any())).thenReturn(0L);
-        when(userRepository.findByEmail("harsha@fintrack.com")).thenReturn(Optional.of(user));
+        when(userRepository.findByEmailIgnoreCase("harsha@fintrack.com")).thenReturn(Optional.of(user));
         when(tokenRepository.countByUserIdAndCreatedAtAfter(eq(1L), any())).thenReturn(0L);
 
-        resetService.processForgotPassword(new ForgotPasswordRequest("harsha@fintrack.com"), "127.0.0.1");
+        String resetUrl = resetService.processForgotPassword(new ForgotPasswordRequest("harsha@fintrack.com"), "127.0.0.1");
+        assertNotNull(resetUrl);
+        assertTrue(resetUrl.contains("/reset-password?token="));
 
         // Verifies previous tokens invalidated
         verify(tokenRepository, times(1)).invalidateAllActiveTokensForUser(eq(1L), any());
@@ -83,13 +87,77 @@ class PasswordResetServiceTest {
     }
 
     @Test
-    @DisplayName("Forgot password for non-existent user returns cleanly without sending email (prevents enumeration)")
-    void testProcessForgotPasswordNonExistentUser() {
+    @DisplayName("2. Unregistered email throws 404 NOT_FOUND, sends no email, and creates no token")
+    void testProcessForgotPasswordUnregisteredEmailThrows404() {
         when(tokenRepository.countByIpAddressAndCreatedAtAfter(anyString(), any())).thenReturn(0L);
-        when(userRepository.findByEmail("unknown@fintrack.com")).thenReturn(Optional.empty());
+        when(userRepository.findByEmailIgnoreCase("unregistered@fintrack.com")).thenReturn(Optional.empty());
 
-        assertDoesNotThrow(() ->
-                resetService.processForgotPassword(new ForgotPasswordRequest("unknown@fintrack.com"), "127.0.0.1")
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class, () ->
+                resetService.processForgotPassword(new ForgotPasswordRequest("unregistered@fintrack.com"), "127.0.0.1")
+        );
+
+        assertEquals(HttpStatus.NOT_FOUND, ex.getStatusCode());
+        assertEquals("No account is registered with this email address", ex.getReason());
+
+        // Verifies zero tokens saved and zero emails sent
+        verify(tokenRepository, never()).save(any());
+        verify(authEmailService, never()).sendPasswordResetEmailAsync(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("3. Email with leading/trailing whitespace is trimmed and handled consistently")
+    void testProcessForgotPasswordWithWhitespace() {
+        User user = User.builder()
+                .id(2L)
+                .username("whitespace_user")
+                .email("clean@fintrack.com")
+                .fullName("Whitespace User")
+                .password("encoded_pass")
+                .build();
+
+        when(tokenRepository.countByIpAddressAndCreatedAtAfter(anyString(), any())).thenReturn(0L);
+        when(userRepository.findByEmailIgnoreCase("clean@fintrack.com")).thenReturn(Optional.of(user));
+        when(tokenRepository.countByUserIdAndCreatedAtAfter(eq(2L), any())).thenReturn(0L);
+
+        // Input contains leading and trailing spaces
+        String resetUrl = resetService.processForgotPassword(new ForgotPasswordRequest("   clean@fintrack.com   "), "127.0.0.1");
+        assertNotNull(resetUrl);
+
+        verify(userRepository, times(1)).findByEmailIgnoreCase("clean@fintrack.com");
+        verify(authEmailService, times(1)).sendPasswordResetEmailAsync(eq("clean@fintrack.com"), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("4. Email case differences (uppercase) match registered account case-insensitively")
+    void testProcessForgotPasswordCaseInsensitive() {
+        User user = User.builder()
+                .id(3L)
+                .username("mixedcase_user")
+                .email("user@fintrack.com")
+                .fullName("Mixed Case User")
+                .password("encoded_pass")
+                .build();
+
+        when(tokenRepository.countByIpAddressAndCreatedAtAfter(anyString(), any())).thenReturn(0L);
+        when(userRepository.findByEmailIgnoreCase("user@fintrack.com")).thenReturn(Optional.of(user));
+        when(tokenRepository.countByUserIdAndCreatedAtAfter(eq(3L), any())).thenReturn(0L);
+
+        // Input in uppercase
+        String resetUrl = resetService.processForgotPassword(new ForgotPasswordRequest("USER@FINTRACK.COM"), "127.0.0.1");
+        assertNotNull(resetUrl);
+
+        verify(userRepository, times(1)).findByEmailIgnoreCase("user@fintrack.com");
+        verify(authEmailService, times(1)).sendPasswordResetEmailAsync(eq("user@fintrack.com"), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("5. Database lookup failure throws exception and does not report success or send email")
+    void testProcessForgotPasswordDatabaseLookupFailure() {
+        when(tokenRepository.countByIpAddressAndCreatedAtAfter(anyString(), any())).thenReturn(0L);
+        when(userRepository.findByEmailIgnoreCase("db_error@fintrack.com")).thenThrow(new DataAccessException("DB connection error") {});
+
+        assertThrows(DataAccessException.class, () ->
+                resetService.processForgotPassword(new ForgotPasswordRequest("db_error@fintrack.com"), "127.0.0.1")
         );
 
         verify(tokenRepository, never()).save(any());
@@ -97,7 +165,45 @@ class PasswordResetServiceTest {
     }
 
     @Test
-    @DisplayName("Token validation returns true for active unconsumed token, false for invalid/expired")
+    @DisplayName("6. IP rate limiting blocks excessive requests (> 10 per hour)")
+    void testProcessForgotPasswordIpRateLimitExceeded() {
+        when(tokenRepository.countByIpAddressAndCreatedAtAfter(eq("192.168.1.50"), any())).thenReturn(10L);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class, () ->
+                resetService.processForgotPassword(new ForgotPasswordRequest("rate_limit@fintrack.com"), "192.168.1.50")
+        );
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, ex.getStatusCode());
+        verify(userRepository, never()).findByEmailIgnoreCase(anyString());
+        verify(authEmailService, never()).sendPasswordResetEmailAsync(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("7. User rate limiting blocks excessive requests (> 5 per hour)")
+    void testProcessForgotPasswordUserRateLimitExceeded() {
+        User user = User.builder()
+                .id(5L)
+                .username("active_user")
+                .email("user_limit@fintrack.com")
+                .fullName("Active User")
+                .password("encoded_pass")
+                .build();
+
+        when(tokenRepository.countByIpAddressAndCreatedAtAfter(anyString(), any())).thenReturn(0L);
+        when(userRepository.findByEmailIgnoreCase("user_limit@fintrack.com")).thenReturn(Optional.of(user));
+        when(tokenRepository.countByUserIdAndCreatedAtAfter(eq(5L), any())).thenReturn(5L);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class, () ->
+                resetService.processForgotPassword(new ForgotPasswordRequest("user_limit@fintrack.com"), "127.0.0.1")
+        );
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, ex.getStatusCode());
+        verify(tokenRepository, never()).save(any());
+        verify(authEmailService, never()).sendPasswordResetEmailAsync(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("8. Token validation returns true for active unconsumed token, false for invalid/expired")
     void testValidateToken() {
         String rawToken = "my_secret_token_1234567890123456";
         String hash = resetService.hashToken(rawToken);
@@ -124,7 +230,7 @@ class PasswordResetServiceTest {
     }
 
     @Test
-    @DisplayName("Reset password updates user credentials, consumes token, and sends security alert")
+    @DisplayName("9. Reset password updates user credentials, consumes token, and sends security alert")
     void testResetPasswordSuccess() {
         String rawToken = "valid_reset_token_32_characters!";
         String hash = resetService.hashToken(rawToken);
@@ -159,7 +265,7 @@ class PasswordResetServiceTest {
     }
 
     @Test
-    @DisplayName("Reset password rejects weak passwords that do not meet corporate security policy")
+    @DisplayName("10. Reset password rejects weak passwords that do not meet corporate security policy")
     void testResetPasswordRejectsWeakPassword() {
         String rawToken = "valid_reset_token_32_characters!";
         String hash = resetService.hashToken(rawToken);
@@ -180,7 +286,7 @@ class PasswordResetServiceTest {
     }
 
     @Test
-    @DisplayName("Token single-use: Reusing an already consumed token fails")
+    @DisplayName("11. Token single-use: Reusing an already consumed token fails")
     void testReusingConsumedTokenFails() {
         String rawToken = "already_used_token_123456789012";
         String hash = resetService.hashToken(rawToken);
